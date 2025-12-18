@@ -1,0 +1,8 @@
+pandas
+numpy
+scipy
+matplotlib
+scikit-learn
+pyarrow        # or fastparquet, needed for parquet IO
+streamlit
+pytest

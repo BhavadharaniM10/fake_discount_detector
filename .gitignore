@@ -1,0 +1,14 @@
+# Dataset (too large for GitHub)
+data/*.csv
+data/*.parquet
+
+# Generated outputs
+data/*.png
+
+# Logs
+logs/*
+!logs/.gitkeep
+
+# Python cache
+__pycache__/
+*.pyc
