@@ -1,3 +1,4 @@
+from datetime import timedelta
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import IsolationForest
@@ -6,11 +7,15 @@ from .config import (
     IFOREST_CONTAMINATION,
     IFOREST_RANDOM_STATE,
     ENGINEERED_FEATURES_PATH,
+    RECENT_WINDOW_DAYS,
+    DROP_THRESHOLD,
+    SPIKE_Z_THRESHOLD,
 )
 from .rule_detection import detect_fake_discount
 from .utils import setup_logging
 
 logger = setup_logging()
+
 
 def load_engineered_features(path: str = ENGINEERED_FEATURES_PATH) -> pd.DataFrame:
     return pd.read_parquet(path)
@@ -71,23 +76,47 @@ def hybrid_detect_fake_discount(
     score_dict: dict,
     product_code: str,
     evaluation_date: str,
-    **kwargs,
+    current_price: float = None,
+    claimed_original_price: float = None,
+    window_days: int = RECENT_WINDOW_DAYS,
+    drop_threshold: float = DROP_THRESHOLD,
+    spike_z_threshold: float = SPIKE_Z_THRESHOLD,
 ) -> dict:
     """
-    Combine rule-based detection with ML anomaly score.
+    Hybrid ML + rule-based fake discount detection.
+    Supports:
+    - Historical mode (dataset price)
+    - Real-time mode (user-entered price for today, anchored to last dataset window)
     """
-    rule_result = detect_fake_discount(df, product_code, evaluation_date, **kwargs)
 
+    eval_date = pd.to_datetime(evaluation_date).normalize()
+    today = pd.Timestamp.today().normalize()
+
+    # Run rule-based detection first (handles both historical and today logic)
+    rule_result = detect_fake_discount(
+        df,
+        product_code,
+        evaluation_date,
+        current_price=current_price,
+        claimed_original_price=claimed_original_price,
+        window_days=window_days,
+        drop_threshold=drop_threshold,
+        spike_z_threshold=spike_z_threshold,
+    )
+
+    # ML anomaly score is product-level (since today isn't in dataset)
     ml_score = float(score_dict.get(product_code, 0.0))
 
-    final_status = rule_result["discount_status"]
-    if rule_result["discount_status"] == "Suspicious" and ml_score > 0.5:
+    # Adjust status based on ML score
+    final_status = rule_result.get("discount_status", "Unknown")
+    if final_status == "Suspicious" and ml_score > 0.5:
+        final_status = "Highly Suspicious"
+    elif final_status == "Genuine" and ml_score > 0.75:
         final_status = "Highly Suspicious"
 
+    # Update result dict
     rule_result["ml_anomaly_score"] = round(ml_score, 3)
-    rule_result["final_status"] = final_status
-    rule_result["explanation"] += (
-        f" ML anomaly score: {ml_score:.3f} (higher = more abnormal)."
-    )
+    rule_result["discount_status"] = final_status
+    rule_result["explanation"] += f" ML anomaly score: {ml_score:.3f} (higher = more abnormal)."
 
     return rule_result
