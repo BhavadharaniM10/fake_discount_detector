@@ -15,10 +15,11 @@ def plot_detection(
 ):
     """
     Plot price history with evaluation date, peak, drop, and spike markers.
+    In today mode, plots the marker above the last dataset date to avoid gaps.
     Saves PNG and returns matplotlib figure.
     """
     product_code = result["product_code"]
-    eval_date = pd.to_datetime(result["evaluation_date"])
+    eval_date = pd.to_datetime(result["evaluation_date"]).normalize()
     current_price = result.get("current_price", None)
     claimed_original = result.get("claimed_original_price", None)
 
@@ -37,65 +38,85 @@ def plot_detection(
         markersize=4,
     )
 
-    if current_price is not None and claimed_original is not None:
-        start_date = eval_date - pd.Timedelta(days=90)
-        recent_df = product_df[
-            (product_df["order_date"] >= start_date)
-            & (product_df["order_date"] <= eval_date)
-        ]
-        if not recent_df.empty:
-            peak_idx = recent_df["daily_mean_price"].idxmax()
-            peak_date = recent_df.loc[peak_idx, "order_date"]
+    today = pd.Timestamp.today().normalize()
+    last_date = product_df["order_date"].max()
 
+    # -------------------------------
+    # Historical mode
+    # -------------------------------
+    if eval_date in product_df["order_date"].dt.normalize().values:
+        ax.axvline(eval_date, color="red", linestyle="--", label="Evaluation Date")
+
+    # -------------------------------
+    # Real-time mode (today)
+    # -------------------------------
+    elif eval_date == today and current_price is not None:
+        # Plot today’s marker directly above last dataset date
+        ax.scatter(
+            last_date,
+            current_price,
+            color="red",
+            s=180,
+            marker="o",
+            label=f"Today Price (${current_price:.2f})",
+        )
+        # Annotate clearly that this is today’s user-entered price
+        ax.annotate(
+            f"Today (user): ${current_price:.2f}",
+            (last_date, current_price),
+            textcoords="offset points",
+            xytext=(0, 10),
+            ha="center",
+            color="red",
+            fontsize=12,
+            fontweight="bold",
+        )
+
+        # Draw drop line if claimed original >= current
+        if claimed_original is not None and claimed_original >= current_price:
             ax.plot(
-                [peak_date, eval_date],
+                [last_date, last_date],
                 [claimed_original, current_price],
                 color="red",
                 linestyle="--",
                 linewidth=3,
-                label="Peak to Drop",
+                label="Claimed Drop",
             )
-
             ax.scatter(
-                peak_date,
+                last_date,
                 claimed_original,
                 color="green",
                 s=150,
                 marker="^",
-                label=f"Price Peak (${claimed_original:.2f})",
+                label=f"Claimed Original (${claimed_original:.2f})",
             )
-            ax.scatter(
-                eval_date,
-                current_price,
-                color="orange",
-                s=150,
-                marker="v",
-                label=f"Current Price (${current_price:.2f})",
-            )
-
             ax.fill_betweenx(
                 [current_price, claimed_original],
-                peak_date,
-                eval_date,
+                last_date,
+                last_date,
                 color="red",
                 alpha=0.15,
                 label="Drop Area",
             )
 
-            if show_spikes and "rolling_z_score" in product_df.columns:
-                spikes = recent_df[recent_df["rolling_z_score"] > 2.0]
-                if not spikes.empty:
-                    ax.scatter(
-                        spikes["order_date"],
-                        spikes["daily_mean_price"],
-                        color="purple",
-                        s=120,
-                        marker="*",
-                        label="Detected Spikes (z > 2.0)",
-                    )
+    # -------------------------------
+    # Spike markers
+    # -------------------------------
+    if show_spikes and "rolling_z_score" in product_df.columns:
+        spikes = product_df[product_df["rolling_z_score"] > 2.0]
+        if not spikes.empty:
+            ax.scatter(
+                spikes["order_date"],
+                spikes["daily_mean_price"],
+                color="purple",
+                s=120,
+                marker="*",
+                label="Detected Spikes (z > 2.0)",
+            )
 
-    ax.axvline(eval_date, color="red", linestyle="--", label="Evaluation Date")
-
+    # -------------------------------
+    # Final chart formatting
+    # -------------------------------
     ax.set_title(
         f"Price History for {product_code}\nStatus: {result.get('final_status', result.get('discount_status'))}"
     )
